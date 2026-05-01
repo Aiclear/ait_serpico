@@ -3,155 +3,153 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"github.cfm/wailmapp/wails/v2/pkg/runtimet"
+	"fmt"
 	"os"
-	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// App struct
-type App struct {
-	ctx context.Context
+type FileOperation struct {
+	OriginalPath string `json:"original_path"`
+	NewPath      string `json:"new_path"`
+	FileName     string `json:"file_name"`
 }
 
-// NewApp creates a new App application struct
+type HistoryRecord struct {
+	ID           string          `json:"id"`
+	FolderPath   string          `json:"folder_path"`
+	OrganizeBy   string          `json:"organize_by"`
+	Timestamp    int64           `json:"timestamp"`
+	Operations   []FileOperation `json:"operations"`
+	IsRolledBack bool            `json:"is_rolled_back"`
+}
+
+type CustomRule struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Condition     string `json:"condition"`
+	ConditionType string `json:"condition_type"`
+	TargetFolder  string `json:"target_folder"`
+}
+
+type App struct {
+	ctx             context.Context
+	historyFile     string
+	customRulesFile string
+}
+
 func NewApp() *App {
 	return &App{}
 }
 
-// startup is called when the app starts. The context is saved
-// so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Println("Error getting home directory:", err)
+		return
+	}
+	appDataDir := filepath.Join(homeDir, ".file_organizer")
+	os.MkdirAll(appDataDir, 0755)
+	a.historyFile = filepath.Join(appDataDir, "history.json")
+	a.customRulesFile = filepath.Join(appDataDir, "custom_rules.json")
 }
 
-// Greet returns a greeting for the given name
 func (a *App) Greet(name string) string {
 	return fmt.Sprintf("Hello %s, It's show time!", name)
 }
 
-// const organizeOptions = ["Year", "Month", "File Type"];
-func (a *App) OrganizeFolder(path, Organizeby string) {
-	switch Organizeby {
+func (a *App) OrganizeFolder(path, organizeBy string) error {
+	var operations []FileOperation
+	var err error
+
+	switch organizeBy {
 	case "File Type":
-		OrganizeByFile(path)
+		operations, err = a.OrganizeByFile(path)
 	case "Year":
-		OrganizebyYear(path)
+		operations, err = a.OrganizeByYear(path)
 	case "Month":
-		OrganizebyMonth(path)
+		operations, err = a.OrganizeByMonth(path)
+	default:
+		customRules, loadErr := a.loadCustomRules()
+		if loadErr == nil {
+			for _, rule := range customRules {
+				if rule.ID == organizeBy {
+					operations, err = a.OrganizeByCustomRule(path, rule)
+					break
+				}
+			}
+		}
 	}
+
+	if err != nil {
+		return err
+	}
+
+	if len(operations) > 0 {
+		record := HistoryRecord{
+			ID:           generateID(),
+			FolderPath:   path,
+			OrganizeBy:   organizeBy,
+			Timestamp:    time.Now().Unix(),
+			Operations:   operations,
+			IsRolledBack: false,
+		}
+		a.saveHistoryRecord(record)
+	}
+
+	return nil
 }
 
-func OrganizebyMonth(path string) {
-	orgf := make(map[string]int)
-	files, err := os.Open(path)
-	if err != nil {
-		fmt.Println(err.Error())
-		return
-	}
-	defer files.Close()
-
-	fileinfo, err := files.Readdir(-1)
-	if err != nil {
-		fmt.Println("error reading directory:", err)
-		//if directory is not read properly print error message
-		return
-	}
-
-	for _, f := range fileinfo {
-		d := f.Sys().(*syscall.Win32FileAttributeData)
-		cTime := time.Unix(0, d.CreationTime.Nanoseconds())
-		// t := cTime.Month()
-		des := cTime.Month().String()
-		fmt.Printf("File: %s, Year Created: %d\n", f.Name(), des)
-
-		destDir := filepath.Join(path, des)
-		if _, ok := orgf[des]; !ok {
-			orgf[des] = 0
-			os.Mkdir(destDir, 0755)
-		}
-
-		oldPath := filepath.Join(path, f.Name())
-		newPath := filepath.Join(destDir, f.Name())
-
-		// Move file to new directory
-		err = os.Rename(oldPath, newPath)
-		if err != nil {
-			fmt.Println("Error moving file:", err)
-			continue
-		}
-
-		fmt.Printf("Moved %s to %s\n", oldPath, newPath)
-	}
+func generateID() string {
+	return strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
-func OrganizebyYear(path string) {
-	orgf := make(map[int]int)
-	files, err := os.Open(path)
+func (a *App) saveHistoryRecord(record HistoryRecord) error {
+	history, err := a.loadHistory()
 	if err != nil {
-		fmt.Println(err.Error())
-		return
+		history = []HistoryRecord{}
 	}
-	defer files.Close()
+	history = append([]HistoryRecord{record}, history...)
 
-	fileinfo, err := files.Readdir(-1)
+	data, err := json.MarshalIndent(history, "", "  ")
 	if err != nil {
-		fmt.Println("error reading directory:", err) //if directory is not read properly print error message
-		return
+		return err
 	}
-
-	for _, f := range fileinfo {
-		d := f.Sys().(*syscall.Win32FileAttributeData)
-		cTime := time.Unix(0, d.CreationTime.Nanoseconds())
-		// t := cTime.Year()
-		fmt.Printf("File: %s, Year Created: %d\n", f.Name(), cTime.Year())
-
-		des := strconv.Itoa(cTime.Year())
-		destDir := filepath.Join(path, des)
-		if _, ok := orgf[cTime.Year()]; !ok {
-			orgf[cTime.Year()] = 0
-			os.Mkdir(destDir, 0755)
-		}
-
-		oldPath := filepath.Join(path, f.Name())
-		newPath := filepath.Join(destDir, f.Name())
-
-		// Move file to new directory
-		err = os.Rename(oldPath, newPath)
-		if err != nil {
-			fmt.Println("Error moving file:", err)
-			continue
-		}
-
-		fmt.Printf("Moved %s to %s\n", oldPath, newPath)
-	}
+	return os.WriteFile(a.historyFile, data, 0644)
 }
 
-func OrganizeByFile(path string) {
-	file_ext := map[string]string{
-		".txt":  "text file",
-		".pdf":  "pdf",
-		".jpg":  "image",
-		".png":  "image",
-		".jpeg": "image",
-		".mp3":  "audio",
-		".ppt":  "powerpoint",
-		".mkv":  "video",
-		".mp4":  "video",
-		".zip":  "zip files",
-		".csv":  "csv files",
-		".xlsx": "spreadsheets",
-		".msi":  "software",
-		".apk":  "software",
-		".exe":  "software",
+func (a *App) loadHistory() ([]HistoryRecord, error) {
+	data, err := os.ReadFile(a.historyFile)
+	if err != nil {
+		return nil, err
+	}
+	var history []HistoryRecord
+	err = json.Unmarshal(data, &history)
+	return history, err
+}
+
+func (a *App) GetHistory() ([]HistoryRecord, error) {
+	return a.loadHistory()
+}
+
+func (a *App) Rollback(historyID string) error {
+	history, err := a.loadHistory()
+	if err != nil {
+		return err
 	}
 
-	files, err := os.Open(path)
-	if err != nil {
-		fmt.Println(err.Error())
-		return
+	var targetRecord *HistoryRecord
+	for i := range history {
+		if history[i].ID == historyID && !history[i].IsRolledBack {
+			targetRecord = &history[i]
+			break
+		}
 	}
 
 	if targetRecord == nil {
@@ -190,14 +188,13 @@ func OrganizeByFile(path string) {
 	data, err := json.MarshalIndent(history, "", "  ")
 	if err != nil {
 		return err
-		
+	}
 	os.WriteFile(a.historyFile, data, 0644)
 
-		r _, op := range targetRecord.Operations {
+	for _, op := range targetRecord.Operations {
 		dir := filepath.Dir(op.NewPath)
 		if dir != targetRecord.FolderPath {
-	
-		isEmpty, _ := isDirEmpty(dir)
+			isEmpty, _ := isDirEmpty(dir)
 			if isEmpty {
 				os.Remove(dir)
 			}
@@ -234,7 +231,7 @@ func (a *App) getUniquePath(path string) string {
 	}
 }
 
-func (a *App) OrganizebyMonth(path string) ([]FileOperation, error) {
+func (a *App) OrganizeByMonth(path string) ([]FileOperation, error) {
 	orgf := make(map[string]int)
 	var operations []FileOperation
 
@@ -289,7 +286,7 @@ func (a *App) OrganizebyMonth(path string) ([]FileOperation, error) {
 	return operations, nil
 }
 
-func (a *App) OrganizebyYear(path string) ([]FileOperation, error) {
+func (a *App) OrganizeByYear(path string) ([]FileOperation, error) {
 	orgf := make(map[int]int)
 	var operations []FileOperation
 
