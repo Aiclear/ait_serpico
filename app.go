@@ -68,6 +68,8 @@ func (a *App) OrganizeFolder(path, organizeBy string) error {
 	var operations []FileOperation
 	var err error
 
+	fmt.Printf("OrganizeFolder called with path: %s, organizeBy: %s\n", path, organizeBy)
+
 	switch organizeBy {
 	case "File Type":
 		operations, err = a.OrganizeByFile(path)
@@ -76,20 +78,36 @@ func (a *App) OrganizeFolder(path, organizeBy string) error {
 	case "Month":
 		operations, err = a.OrganizeByMonth(path)
 	default:
+		fmt.Println("Attempting to use custom rule...")
 		customRules, loadErr := a.loadCustomRules()
-		if loadErr == nil {
-			for _, rule := range customRules {
-				if rule.ID == organizeBy {
-					operations, err = a.OrganizeByCustomRule(path, rule)
-					break
-				}
+		if loadErr != nil {
+			fmt.Printf("Failed to load custom rules: %v\n", loadErr)
+			return fmt.Errorf("custom rule not found or failed to load: %w", loadErr)
+		}
+
+		fmt.Printf("Loaded %d custom rules\n", len(customRules))
+		for i, rule := range customRules {
+			fmt.Printf("Rule %d: ID=%s, Name=%s, ConditionType=%s, Condition=%s\n",
+				i, rule.ID, rule.Name, rule.ConditionType, rule.Condition)
+			if rule.ID == organizeBy {
+				fmt.Printf("Found matching rule: %s\n", rule.Name)
+				operations, err = a.OrganizeByCustomRule(path, rule)
+				break
 			}
+		}
+
+		if len(operations) == 0 && err == nil {
+			fmt.Printf("No custom rule found with ID: %s\n", organizeBy)
+			return fmt.Errorf("custom rule with ID '%s' not found", organizeBy)
 		}
 	}
 
 	if err != nil {
+		fmt.Printf("Error during organize: %v\n", err)
 		return err
 	}
+
+	fmt.Printf("Organize completed, moved %d files\n", len(operations))
 
 	if len(operations) > 0 {
 		record := HistoryRecord{
@@ -421,6 +439,9 @@ func (a *App) SelectDirectory() (string, error) {
 func (a *App) OrganizeByCustomRule(path string, rule CustomRule) ([]FileOperation, error) {
 	var operations []FileOperation
 
+	fmt.Printf("OrganizeByCustomRule: path=%s, rule=%s, conditionType=%s, condition=%s, targetFolder=%s\n",
+		path, rule.Name, rule.ConditionType, rule.Condition, rule.TargetFolder)
+
 	files, err := os.Open(path)
 	if err != nil {
 		fmt.Println(err.Error())
@@ -434,12 +455,17 @@ func (a *App) OrganizeByCustomRule(path string, rule CustomRule) ([]FileOperatio
 		return operations, err
 	}
 
+	fmt.Printf("Found %d files in directory\n", len(fileinfo))
+
 	for _, f := range fileinfo {
 		if f.IsDir() {
+			fmt.Printf("Skipping directory: %s\n", f.Name())
 			continue
 		}
 
+		fmt.Printf("Checking file: %s\n", f.Name())
 		if a.matchesRule(f, rule) {
+			fmt.Printf("File %s matches rule, moving to %s\n", f.Name(), rule.TargetFolder)
 			destDir := filepath.Join(path, rule.TargetFolder)
 			os.Mkdir(destDir, 0755)
 
@@ -461,34 +487,62 @@ func (a *App) OrganizeByCustomRule(path string, rule CustomRule) ([]FileOperatio
 			})
 
 			fmt.Printf("Moved %s to %s\n", oldPath, newPath)
+		} else {
+			fmt.Printf("File %s does not match rule\n", f.Name())
 		}
 	}
 
+	fmt.Printf("OrganizeByCustomRule completed, moved %d files\n", len(operations))
 	return operations, nil
 }
 
 func (a *App) matchesRule(file os.FileInfo, rule CustomRule) bool {
+	fmt.Printf("matchesRule: file=%s, conditionType=%s, condition=%s\n",
+		file.Name(), rule.ConditionType, rule.Condition)
+
 	switch rule.ConditionType {
 	case "extension":
 		ext := filepath.Ext(file.Name())
-		return strings.EqualFold(strings.TrimPrefix(ext, "."), rule.Condition)
+		fmt.Printf("  Checking extension: file ext=%s, condition=%s\n", ext, rule.Condition)
+		result := strings.EqualFold(strings.TrimPrefix(ext, "."), rule.Condition)
+		fmt.Printf("  Result: %v\n", result)
+		return result
 	case "filename_contains":
-		return strings.Contains(strings.ToLower(file.Name()), strings.ToLower(rule.Condition))
+		fileNameLower := strings.ToLower(file.Name())
+		conditionLower := strings.ToLower(rule.Condition)
+		fmt.Printf("  Checking contains: fileName=%s, condition=%s\n", fileNameLower, conditionLower)
+		result := strings.Contains(fileNameLower, conditionLower)
+		fmt.Printf("  Result: %v\n", result)
+		return result
 	case "filename_starts_with":
-		return strings.HasPrefix(strings.ToLower(file.Name()), strings.ToLower(rule.Condition))
+		fileNameLower := strings.ToLower(file.Name())
+		conditionLower := strings.ToLower(rule.Condition)
+		fmt.Printf("  Checking starts with: fileName=%s, condition=%s\n", fileNameLower, conditionLower)
+		result := strings.HasPrefix(fileNameLower, conditionLower)
+		fmt.Printf("  Result: %v\n", result)
+		return result
 	case "size_larger":
 		size, err := strconv.ParseInt(rule.Condition, 10, 64)
 		if err != nil {
+			fmt.Printf("  Invalid size condition: %s\n", rule.Condition)
 			return false
 		}
-		return file.Size() > size*1024
+		fmt.Printf("  Checking size: file size=%d bytes, condition=%d KB\n", file.Size(), size)
+		result := file.Size() > size*1024
+		fmt.Printf("  Result: %v\n", result)
+		return result
 	case "size_smaller":
 		size, err := strconv.ParseInt(rule.Condition, 10, 64)
 		if err != nil {
+			fmt.Printf("  Invalid size condition: %s\n", rule.Condition)
 			return false
 		}
-		return file.Size() < size*1024
+		fmt.Printf("  Checking size: file size=%d bytes, condition=%d KB\n", file.Size(), size)
+		result := file.Size() < size*1024
+		fmt.Printf("  Result: %v\n", result)
+		return result
 	default:
+		fmt.Printf("  Unknown condition type: %s\n", rule.ConditionType)
 		return false
 	}
 }
