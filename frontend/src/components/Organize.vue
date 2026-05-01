@@ -31,21 +31,27 @@ var result = {
 };
 
 // 示例：根据文件扩展名分类
-if (file.extension === ".txt" || file.extension === ".doc" || file.extension === ".docx") {
+if (file.extension === ".txt" || file.extension === ".doc" || file.extension === ".docx" || file.extension === ".md") {
   result.shouldOrganize = true;
   result.targetDirectory = "Documents";
-} else if (file.extension === ".jpg" || file.extension === ".png" || file.extension === ".jpeg") {
+} else if (file.extension === ".jpg" || file.extension === ".png" || file.extension === ".jpeg" || file.extension === ".gif" || file.extension === ".bmp") {
   result.shouldOrganize = true;
   result.targetDirectory = "Images";
-} else if (file.extension === ".mp3" || file.extension === ".wav" || file.extension === ".flac") {
+} else if (file.extension === ".mp3" || file.extension === ".wav" || file.extension === ".flac" || file.extension === ".aac") {
   result.shouldOrganize = true;
   result.targetDirectory = "Audio";
-} else if (file.extension === ".mp4" || file.extension === ".avi" || file.extension === ".mkv") {
+} else if (file.extension === ".mp4" || file.extension === ".avi" || file.extension === ".mkv" || file.extension === ".mov" || file.extension === ".wmv") {
   result.shouldOrganize = true;
   result.targetDirectory = "Videos";
-} else if (file.extension === ".zip" || file.extension === ".rar" || file.extension === ".7z") {
+} else if (file.extension === ".zip" || file.extension === ".rar" || file.extension === ".7z" || file.extension === ".tar" || file.extension === ".gz") {
   result.shouldOrganize = true;
   result.targetDirectory = "Archives";
+} else if (file.extension === ".pdf") {
+  result.shouldOrganize = true;
+  result.targetDirectory = "PDFs";
+} else if (file.extension === ".exe" || file.extension === ".msi" || file.extension === ".apk") {
+  result.shouldOrganize = true;
+  result.targetDirectory = "Software";
 } else if (file.size > 100 * 1024 * 1024) { // 大于100MB
   result.shouldOrganize = true;
   result.targetDirectory = "Large Files";

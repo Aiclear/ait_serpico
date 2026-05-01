@@ -103,10 +103,28 @@ func getFileInfo(path string, info os.FileInfo) *FileInfo {
 	}
 }
 
+func toScriptFileInfo(fileInfo *FileInfo) map[string]interface{} {
+	return map[string]interface{}{
+		"name":        fileInfo.Name,
+		"path":        fileInfo.Path,
+		"extension":   fileInfo.Extension,
+		"size":        fileInfo.Size,
+		"created":     fileInfo.Created.Unix(),
+		"createdStr":  fileInfo.Created.Format("2006-01-02 15:04:05"),
+		"modified":    fileInfo.Modified.Unix(),
+		"modifiedStr": fileInfo.Modified.Format("2006-01-02 15:04:05"),
+		"isDirectory": fileInfo.IsDirectory,
+		"baseName":    fileInfo.BaseName,
+	}
+}
+
 func ExecuteScript(script string, fileInfo *FileInfo) (*OrganizeResult, error) {
 	vm := goja.New()
 
-	vm.Set("file", fileInfo)
+	scriptFileInfo := toScriptFileInfo(fileInfo)
+	vm.Set("file", scriptFileInfo)
+
+	fmt.Printf("执行脚本 - 文件: %s, 扩展名: %s\n", fileInfo.Name, fileInfo.Extension)
 
 	_, err := vm.RunString(script)
 	if err != nil {
@@ -115,18 +133,43 @@ func ExecuteScript(script string, fileInfo *FileInfo) (*OrganizeResult, error) {
 
 	resultValue := vm.Get("result")
 	if resultValue == nil || goja.IsUndefined(resultValue) || goja.IsNull(resultValue) {
+		fmt.Println("result 为 null 或 undefined，跳过此文件")
 		return &OrganizeResult{
 			ShouldOrganize: false,
 		}, nil
 	}
 
-	var result OrganizeResult
-	err = vm.ExportTo(resultValue, &result)
-	if err != nil {
-		return nil, fmt.Errorf("结果解析错误: %v", err)
+	resultMap, ok := resultValue.Export().(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("result 必须是一个对象")
 	}
 
-	return &result, nil
+	result := &OrganizeResult{}
+
+	if shouldOrganize, ok := resultMap["shouldOrganize"]; ok {
+		fmt.Printf("找到 shouldOrganize: %v (类型: %T)\n", shouldOrganize, shouldOrganize)
+		if b, ok := shouldOrganize.(bool); ok {
+			result.ShouldOrganize = b
+		}
+	}
+
+	if targetDirectory, ok := resultMap["targetDirectory"]; ok {
+		fmt.Printf("找到 targetDirectory: %v (类型: %T)\n", targetDirectory, targetDirectory)
+		if s, ok := targetDirectory.(string); ok {
+			result.TargetDirectory = s
+		}
+	}
+
+	if newFileName, ok := resultMap["newFileName"]; ok {
+		if s, ok := newFileName.(string); ok {
+			result.NewFileName = s
+		}
+	}
+
+	fmt.Printf("解析结果: shouldOrganize=%v, targetDirectory=%s, newFileName=%s\n",
+		result.ShouldOrganize, result.TargetDirectory, result.NewFileName)
+
+	return result, nil
 }
 
 func OrganizeByCustomScript(path string, script string) error {
