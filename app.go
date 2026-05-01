@@ -51,18 +51,28 @@ func (a *App) Greet(name string) string {
 	return fmt.Sprintf("Hello %s, It's show time!", name)
 }
 
-func (a *App) OrganizeFolder(path, organizeBy string, customScript ...string) {
+type OrganizeError struct {
+	Message string `json:"message"`
+}
+
+func (a *App) OrganizeFolder(path, organizeBy string) error {
 	switch organizeBy {
 	case "File Type":
-		OrganizeByFile(path)
+		return OrganizeByFile(path)
 	case "Year":
-		OrganizebyYear(path)
+		return OrganizebyYear(path)
 	case "Month":
-		OrganizebyMonth(path)
-	case "Custom Script":
-		if len(customScript) > 0 {
-			OrganizeByCustomScript(path, customScript[0])
-		}
+		return OrganizebyMonth(path)
+	default:
+		return fmt.Errorf("未知的整理方式: %s", organizeBy)
+	}
+}
+
+func (a *App) OrganizeFolderWithScript(path, organizeBy, customScript string) error {
+	if organizeBy == "Custom Script" {
+		return OrganizeByCustomScript(path, customScript)
+	} else {
+		return a.OrganizeFolder(path, organizeBy)
 	}
 }
 
@@ -119,19 +129,19 @@ func ExecuteScript(script string, fileInfo *FileInfo) (*OrganizeResult, error) {
 	return &result, nil
 }
 
-func OrganizeByCustomScript(path string, script string) {
+func OrganizeByCustomScript(path string, script string) error {
 	files, err := os.Open(path)
 	if err != nil {
-		fmt.Println(err.Error())
-		return
+		return fmt.Errorf("无法打开目录 [%s]: %v", path, err)
 	}
 	defer files.Close()
 
 	fileinfo, err := files.Readdir(-1)
 	if err != nil {
-		fmt.Println("error reading directory:", err)
-		return
+		return fmt.Errorf("无法读取目录 [%s]: %v", path, err)
 	}
+
+	var errorMessages []string
 
 	for _, f := range fileinfo {
 		if f.IsDir() {
@@ -143,7 +153,9 @@ func OrganizeByCustomScript(path string, script string) {
 
 		result, err := ExecuteScript(script, fileInfo)
 		if err != nil {
-			fmt.Printf("执行脚本错误 [%s]: %v\n", f.Name(), err)
+			errorMsg := fmt.Sprintf("文件 [%s] 脚本执行错误: %v", f.Name(), err)
+			fmt.Println(errorMsg)
+			errorMessages = append(errorMessages, errorMsg)
 			continue
 		}
 
@@ -152,10 +164,19 @@ func OrganizeByCustomScript(path string, script string) {
 			continue
 		}
 
+		if result.TargetDirectory == "" {
+			errorMsg := fmt.Sprintf("文件 [%s] 目标目录为空", f.Name())
+			fmt.Println(errorMsg)
+			errorMessages = append(errorMessages, errorMsg)
+			continue
+		}
+
 		targetDir := filepath.Join(path, result.TargetDirectory)
 		err = os.MkdirAll(targetDir, 0755)
 		if err != nil {
-			fmt.Printf("创建目标目录错误 [%s]: %v\n", targetDir, err)
+			errorMsg := fmt.Sprintf("文件 [%s] 创建目标目录错误 [%s]: %v", f.Name(), targetDir, err)
+			fmt.Println(errorMsg)
+			errorMessages = append(errorMessages, errorMsg)
 			continue
 		}
 
@@ -168,36 +189,40 @@ func OrganizeByCustomScript(path string, script string) {
 
 		err = os.Rename(oldPath, newPath)
 		if err != nil {
-			fmt.Printf("移动文件错误 [%s -> %s]: %v\n", oldPath, newPath, err)
+			errorMsg := fmt.Sprintf("文件 [%s -> %s] 移动错误: %v", oldPath, newPath, err)
+			fmt.Println(errorMsg)
+			errorMessages = append(errorMessages, errorMsg)
 			continue
 		}
 
 		fmt.Printf("移动成功 [%s -> %s]\n", oldPath, newPath)
 	}
+
+	if len(errorMessages) > 0 {
+		return fmt.Errorf("整理过程中发生 %d 个错误: %v", len(errorMessages), errorMessages)
+	}
+
+	return nil
 }
 
-func OrganizebyMonth(path string) {
+func OrganizebyMonth(path string) error {
 	orgf := make(map[string]int)
 	files, err := os.Open(path)
 	if err != nil {
-		fmt.Println(err.Error())
-		return
+		return fmt.Errorf("无法打开目录 [%s]: %v", path, err)
 	}
 	defer files.Close()
 
 	fileinfo, err := files.Readdir(-1)
 	if err != nil {
-		fmt.Println("error reading directory:", err)
-		//if directory is not read properly print error message
-		return
+		return fmt.Errorf("无法读取目录 [%s]: %v", path, err)
 	}
 
 	for _, f := range fileinfo {
 		d := f.Sys().(*syscall.Win32FileAttributeData)
 		cTime := time.Unix(0, d.CreationTime.Nanoseconds())
-		// t := cTime.Month()
 		des := cTime.Month().String()
-		fmt.Printf("File: %s, Year Created: %d\n", f.Name(), des)
+		fmt.Printf("File: %s, Year Created: %s\n", f.Name(), des)
 
 		destDir := filepath.Join(path, des)
 		if _, ok := orgf[des]; !ok {
@@ -208,36 +233,34 @@ func OrganizebyMonth(path string) {
 		oldPath := filepath.Join(path, f.Name())
 		newPath := filepath.Join(destDir, f.Name())
 
-		// Move file to new directory
 		err = os.Rename(oldPath, newPath)
 		if err != nil {
-			fmt.Println("Error moving file:", err)
+			fmt.Printf("Error moving file %s: %v\n", f.Name(), err)
 			continue
 		}
 
 		fmt.Printf("Moved %s to %s\n", oldPath, newPath)
 	}
+
+	return nil
 }
 
-func OrganizebyYear(path string) {
+func OrganizebyYear(path string) error {
 	orgf := make(map[int]int)
 	files, err := os.Open(path)
 	if err != nil {
-		fmt.Println(err.Error())
-		return
+		return fmt.Errorf("无法打开目录 [%s]: %v", path, err)
 	}
 	defer files.Close()
 
 	fileinfo, err := files.Readdir(-1)
 	if err != nil {
-		fmt.Println("error reading directory:", err) //if directory is not read properly print error message
-		return
+		return fmt.Errorf("无法读取目录 [%s]: %v", path, err)
 	}
 
 	for _, f := range fileinfo {
 		d := f.Sys().(*syscall.Win32FileAttributeData)
 		cTime := time.Unix(0, d.CreationTime.Nanoseconds())
-		// t := cTime.Year()
 		fmt.Printf("File: %s, Year Created: %d\n", f.Name(), cTime.Year())
 
 		des := strconv.Itoa(cTime.Year())
@@ -250,18 +273,19 @@ func OrganizebyYear(path string) {
 		oldPath := filepath.Join(path, f.Name())
 		newPath := filepath.Join(destDir, f.Name())
 
-		// Move file to new directory
 		err = os.Rename(oldPath, newPath)
 		if err != nil {
-			fmt.Println("Error moving file:", err)
+			fmt.Printf("Error moving file %s: %v\n", f.Name(), err)
 			continue
 		}
 
 		fmt.Printf("Moved %s to %s\n", oldPath, newPath)
 	}
+
+	return nil
 }
 
-func OrganizeByFile(path string) {
+func OrganizeByFile(path string) error {
 	file_ext := map[string]string{
 		".txt":  "text file",
 		".pdf":  "pdf",
@@ -282,15 +306,13 @@ func OrganizeByFile(path string) {
 
 	files, err := os.Open(path)
 	if err != nil {
-		fmt.Println(err.Error())
-		return
+		return fmt.Errorf("无法打开目录 [%s]: %v", path, err)
 	}
 	defer files.Close()
 
 	fileinfo, err := files.Readdir(-1)
 	if err != nil {
-		fmt.Println("error reading directory:", err) //if directory is not read properly print error message
-		return
+		return fmt.Errorf("无法读取目录 [%s]: %v", path, err)
 	}
 	for _, f := range fileinfo {
 
@@ -298,17 +320,15 @@ func OrganizeByFile(path string) {
 			ext := filepath.Ext(f.Name())
 			fmt.Println(f.Name())
 			if des, ok := file_ext[ext]; ok {
-				// p := path+
 				destDir := filepath.Join(path, des)
 				os.Mkdir(destDir, 0755)
 
 				oldPath := filepath.Join(path, f.Name())
 				newPath := filepath.Join(destDir, f.Name())
 
-				// Move file to new directory
 				err = os.Rename(oldPath, newPath)
 				if err != nil {
-					fmt.Println("Error moving file:", err)
+					fmt.Printf("Error moving file %s: %v\n", f.Name(), err)
 					continue
 				}
 
@@ -318,6 +338,7 @@ func OrganizeByFile(path string) {
 		}
 	}
 
+	return nil
 }
 
 func (a *App) SelectDirectory() (string, error) {

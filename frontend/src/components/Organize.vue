@@ -1,7 +1,7 @@
 <script setup>
 import { ref } from "vue";
 
-import { OrganizeFolder } from "/wailsjs/go/main/App";
+import { OrganizeFolder, OrganizeFolderWithScript } from "/wailsjs/go/main/App";
 import { SelectDirectory } from "/wailsjs/go/main/App";
 
 const folderPaths = ref([]);
@@ -55,18 +55,22 @@ const organizeF = async () => {
   try {
     for (let i = 0; i < folderPaths.value.length; i++) {
       const folder = folderPaths.value[i];
+      console.log(`正在整理: ${folder.path}, 方式: ${folder.organizeBy}`);
+      
       if (folder.organizeBy === "Custom Script") {
-        await OrganizeFolder(folder.path, folder.organizeBy, folder.customScript || "");
+        await OrganizeFolderWithScript(folder.path, folder.organizeBy, folder.customScript || "");
       } else {
         await OrganizeFolder(folder.path, folder.organizeBy);
       }
-      console.log(folder.path, folder.organizeBy);
+      
+      console.log(`整理完成: ${folder.path}`);
     }
     while (folderPaths.value.length > 0) {
       deleteFolder(0);
     }
   } catch (err) {
-    console.log(err);
+    console.error("整理过程中发生错误:", err);
+    alert(`错误: ${err.message || err}`);
   }
 };
 
